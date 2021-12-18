@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<!--
+
+URL: "https://gist.github.com/triplu-zero/7f8ae3f9cf3909e1459066c99c8e1fb4"
+URL: "https://twitter.com/myriatablet1/status/1409150167492796426"
+EMBED: "<script src="https://gist.github.com/triplu-zero/7f8ae3f9cf3909e1459066c99c8e1fb4.js"></script>"
+Title: "Relaxed Uniform B-spline Curve - #baseline"
+
+Copyright (C) 2021 https://github.com/triplu-zero/
+
+License: Unlicense
+
+TODO:
+ - Convert to SDF
+
+-->
+
+<!--
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Relaxed Uniform B-spline Curve - #baseline</title>
+<meta name="viewport" width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0>
+<style> body {padding: 0; margin: 0;} </style>
+<style>
+body {color:lightgray;background-color:#333}
+div {color: lightgray;background-color:#333;font-size:0px;margin:0;position:absolute;}
+</style>
+<script>
+
+function cubic_coefficients(a, b, c, d, bSpline, n, bBezier, bCatmullRom) {//a cubic, from graph space to equation space
+  var A, B, C, D, dxab;
+  if(bSpline) {
+    if(bCatmullRom) {"interpolate_linear(interpolate_quadratic(a, b, c, 0.5* t+ 0.5), interpolate_quadratic(b, c, d, 0.5* t), t);"
+      //A= 0.5* (-a+ 3* b- 3* c+ d);
+      //B= 0.5* (2* a- 5* b+ 4* c- d);
+      //C= 0.5* (c- a);
+      //D= 0.5* (2* b);
+      A= 0.5* (d- a)+ 1.5* (b- c);//  A= 2* (b- c)+ 0.5* (c- a+ d- b);
+      B= a- 2.5* b+ 2* c- 0.5* d;
+      C= 0.5* (c- a);
+      D= b;
+    }else {//fast and ugly (see also: "")
+      dxab= a- b;
+      A= (d- c)- dxab;
+      B= dxab- A;
+      C= c- a;
+      D= b;
+    }
+  }else {
+    if(bBezier) {//a cubic Bezier curve
+      A= (d+ 3.0* (b- c))- a;
+      B= 3.0* (a+ (c- b- b));
+      C= 3.0* (b- a);
+      D= a;
+    }else {//cubic interpolation
+      A= 0.5* ( -9* a+ 27* b- 27* c+ 9* d);
+      B= 0.5* (+18* a- 45* b+ 36* c- 9* d);
+      C= 0.5* (-11* a+ 18* b-  9* c+ 2* d);
+      D= a;
+    }
+  }
+  if(n>>> 0) {//forward differencing
+    var ax, bx, cx, dx, dt;
+    dt= 1/ n;// "n:= number of points, >0, integer"
+    ax= D;
+    bx= ((A* dt+ B)* dt+ C)* dt;
+    cx= (6* A* dt+ 2* B)* dt* dt;
+    dx= 6* A* dt* dt* dt;
+    return [ax, bx, cx, dx];//"do{x= ax, ax+= bx, bx+= cx, cx+= dx;} while(n--);"
+  }
+  return [A, B, C, D];
+}//~cubic_coefficients()
+
+function horner(a, x) { //evalueaza un polinom [p] de ordinul [n] cu coeficienti reali [a(i)] în punctul [x] (schema lui Horner)
+   var p, i; // n= a.length;
+   i= a.length- 1;
+   p= a[i];
+   while(--i >= 0) p= p* x+ a[i];
+   return p; // "horner([.21, .45], .5) = 0.435"
+}
+
+function interpolate_linear(a, b, t) {
+   return (b- a)* t+ a; //return ((1- t)* a+ t* b);
+}
+
+function interpolate_quadratic(a, b, c, t) {// return x in [a, c] interval for t in [0, 1]
+  var A, B, C;
+  A= a+ c- (b+ b);
+  A+= A;
+  B= c- a- A;
+  C= a;
+  //return horner([C, B, A], t);
+  return (t* (t* A+ B)+ C);//"x= b, for t= 0.5"
+}
+
+function interpolate_cubic(a, b, c, d, t, bSpline) {
+  if(bSpline) { // return x in [b, c] interval for t in [0, 1]
+   var A, B, C, D, dxab;
+   dxab= a- b;
+   A= (d- c)- dxab;
+   B= dxab- A;
+   C= c- a;
+   D= b;
+   //return horner([D, C, B, A], t);
+   return (t* (t* (t* A+ B)+ C)+ D); // horner
+  }else { // return x in [a, d] interval for t in [0, 1]
+    return interpolate_lagrange(a, b, c, d, t);
+  }
+}//~interpolate_cubic()
+
+function interpolate_quintic(a, b, c, d, e, t) {
+  var x;
+  x= interpolate_lagrange([a, b, c, d, e], t);//NOTE: lagrange is slow. TODO: use newton interpolation.
+  return x;
+}//~interpolate_quintic()
+
+function interpolate_lagrange(v, t) {//interpolate using a degree n polynomial, at time t; "n:= (v.length- 1)"; "t:= [0.. 1]"
+  if(arguments.length> 2) {
+    v= vector_copy();//vector_copy(arguments);
+    t= v.pop();
+  }
+  var i, n, x, vxy, bEasy;
+  if(t.length== 2) {
+    bEasy= t.pop();
+    t= t.pop();
+  }
+  n= v.length;
+  vxy= range(1, n+ 1, 1);
+  vector_normalize(vxy);
+  //NOTE: vxy is arbitrary and I see no reason why not to choose another vector (e.g. see the easy curve interpolant, for example)
+  //     ...actually I see every reason you'll want to choose another one
+  //        if you are looking for the smallest (euclidean distance) curve through given points.
+  if(bEasy)
+    vxy.foreach("v[i]= interpolate_easy(0, 1, v[i])");//HOW ABOUT THAT?! :)
+  vxy.foreach("v[i]= [v[i], lParam[i]]", v);//"vxy[i]= [vxy[i], v[i]]"
+  x= lagrange(vxy, t, false); // extrapolate if t is outside the [0, 1] interval
+  return x; //"interpolate_lagrange([1, 4, 3, 2, 5], 0.5)= 3"
+}
+
+/*
+  lagrange interpolating polynomial:
+    input: (arguments)
+     - v: [[t0, x0], [t1, x1], ..., [tn, xn]] (for a degree n polynomial in t)
+     - t: time:
+          - in [t0, tn] interval: interpolate
+          - else: extrapolate
+   output: "f(t)= x"
+     - xt: the interpolated/extrapolated value at time t
+*/
+function lagrange (v, t, bInverse) { // the lagrange interpolating polynomial of (v.length- 1) degree (eg. for v[i][0] return v[i][1], else interpolate, else extrapolate)
+  var n, y, j, i, s, p;
+  n= v.length;
+  s= 0.0;
+  if(bInverse) {
+    for(i= 0; i< n; i++) {
+      p= 1.0;
+      for(j= 0; j< n; j++) {
+        if(i!= j) {
+          p*= (t- v[j][1])/ (v[i][1]- v[j][1]);
+        }
+      }
+      s+= v[i][0]* p;
+    } // "lagrange([[1, 2], [3, 4], [5, 6]], .23, true);= -0.77"
+    return s; // inverse lagrange interpolator
+  }else {
+    for(i= 0; i< n; i++) {
+      p= 1.0;
+      for(j= 0; j< n; j++) {
+        if(i!= j) p*= ((t- v[j][0])/ (v[i][0]- v[j][0]));
+      }
+      s+= v[i][1]* p;
+    }
+    return s; // "lagrange([[1, 3], [2, 4], [3, 7]], 4.0);= 12.0"
+  }
+}//~lagrange()
+
+function interpolate_classic(v, t) {//Newton's interpolation formula (better than Lagrange in terms of arithmetic operation count)
+  var a, p, i, j, n;
+  n= v.length- 1;
+  //compute the coefficients for the interpolating polynomial (classic interpolation method: linear correlation factor)
+  a= [];
+  for(i= 0; i<= n; i++) {
+    a[i]= v[i][1];
+  }
+  for(i= 1; i<= n; i++) {
+    for(j= n; j>= i; j--) {
+      a[j]= (a[j]- a[j- 1])/ (v[j][0]- v[j- i][0]);
+    }
+  }
+  //evaluate the polynomial using one generalization of Horner's rule
+  i= n;
+  p= a[i];
+  while(--i>= 0) {
+    p= p*(t- v[i][0]) + a[i];
+  }
+  return p; // "interpolate_classic([[1, 3], [2, 4], [3, 7]], 4.0);= 12.0"
+}//~interpolate_classic;
+
+function interpolate(v, t, vt) {//parametric interpolation; t:= [0.. 1]; vt: nonlinear correlation factor (normalized)
+  var n, m, p, i;
+  n= v.length; // n- 1 degree interpolating polynomial
+  m= v[0].length; // m-dimensional point (m-dimensional parametric interpolation)
+  if(arguments.length< 3) {//use a linear correlation factor (classic interpolation method)
+    vt= range(1, n+ 1, 1);
+    vector_normalize(vt);
+  }//else:
+  if(m== undefined) {//the unidimensional case
+    var vxy= vector_copy(vt);
+    vxy.foreach("v[i]= [v[i], lParam[i]]", v);//convert a 1D vector to a 2D vector because the classic interpolation scheme is 2D
+    p= interpolate_classic(vxy, t);//lagrange(vxy, t);
+    return p;
+  }
+  p= [];
+  for(i= 0; i< m; i++) {
+    var vxy= vector_copy(vt);
+    vxy.foreach("v[i]= [v[i], (lParam[1][i][lParam[0]])];", [i, v]);
+    //proof that the classic interpolation method is useful even for the nonlinear correlation factor (Now I have no idea what this means :) )
+    //...the "unisolvence theorem" is a dud nonetheless! (I was wrong: the "unisolvence theorem" is OK)
+    p.push(interpolate_classic(vxy, t));// p.push(lagrange(vxy, t));
+  }
+  return p;
+}//~interpolate()
+
+function lerp(a, b, n) {
+   var n= parseInt(arguments[2]);
+   var a= parseFloat(arguments[0]);
+   var b= parseFloat(arguments[1]);
+   switch(n) {
+   case 0: return null;
+   case 1: return (a+ b)/ 2;
+   case 2: return [a, b];
+   case 3: return [a, (a+ b)/ 2, b];
+   case 4:
+      return [a, (2* a+ b)/ 3, (a+ 2* b)/ 3, b];
+   default:
+      var p= new Array(n);
+      p[0]= a;
+      p[--n]= b;
+      for(var i= 1; i< n; i++) {
+         p[i]= ((n- i)* a+ i* b)/ n;
+      }
+      return p;
+   }
+}
+
+function interpolate_easy(a, b, t) { // use the "easy curve" interpolant (more pleasing, a 3rd order polynomial)
+   var p= easy_curve(t); // is equal to linear for 3points [0, 0.5, 1], but closer to 0 in (0, 0.5) and closer to 1 in (0.5, 1)
+   return interpolate_linear(a, b, p);
+}
+
+function interpolate_cosine(a, b, t) {
+   t*= Math.PI;
+   t= 0.5* (1.0- cos(t));
+   return interpolate_linear(a, b, t);
+}
+
+function easy_curve(t, bNew) { // a more pleasing curve than linear interpolation
+   function T3(x) {return (4.0* x* x* x- 3.0* x);}//polinom Chebishev de speta intaia, de ordinul 3
+   if(bNew) {
+     return t* t* t* (t* (t* 6.0- 15.0)+ 10.0);
+   }else {
+     //return (0.5* (1.0- T3(t- 0.5)));//same as (3* t* t- 2* t* t* t)
+     //interpolate_cubic(1, 0, 1, 0, t, true)// ditto
+     var t2;
+     t2= t* t;
+     t*= t2;
+     t+= t;
+     t2+= t2+ t2;
+     return (t2- t);//fast
+   }
+}//~easy_curve()
+
+function PolyBezier(v, c, bMarker) {
+  var i, n;
+  n= v.length;
+  for(i= 0; i< n; i++) {
+    curve(
+      v[i][0], v[i][1],
+      v[i][2], v[i][3],
+      v[i][4], v[i][5],
+      v[i][6], v[i][7],
+      c, bMarker
+    );
+  }
+}//~PolyBezier()
+
+function BSpline2PolyBezier(v, bClosed) {//Relaxed Uniform B-spline Curve
+  var p0x, p1x, p2x, p3x;
+  var p0y, p1y, p2y, p3y;
+  var svx, svy, bv, i, n;
+  n= v.length>> 1;
+  if(n<= 2) return null;
+  n--;
+  svx= [];
+  svy= [];
+  bv= [];
+  var c0, c1, c2;
+  c0= 1/ 6;
+  c1= 2/ 3;
+  c2= 1/ 3;
+  if(bClosed) {
+    svx[0]= c0* v[2* n]+ c1* v[0]+ c0* v[2];//[n, 0, 1]
+    svy[0]= c0* v[2* n+ 1]+ c1* v[1]+ c0* v[3];
+    svx[n]= c0* v[2* (n- 1)]+ c1* v[2* n]+ c0* v[0];//[n- 1, n, 0]
+    svy[n]= c0* v[2* (n- 1)+ 1]+ c1* v[2* n+ 1]+ c0* v[1];
+  }else {
+    svx[0]= v[0];
+    svy[0]= v[1];
+    svx[n]= v[2* n];
+    svy[n]= v[2* n+ 1];
+  }
+  for(i= 1; i< n; i++) {
+    svx[i]= c0* v[2* (i- 1)]+ c1* v[2* i]+ c0* v[2* (i+ 1)];
+    svy[i]= c0* v[2* (i- 1)+ 1]+ c1* v[2* i+ 1]+ c0* v[2* (i+ 1)+ 1];
+  }
+  if(bClosed) {
+    p0x= svx[n];
+    p0y= svy[n];
+    p1x= c1* v[2* n]+ c2* v[0];//[n, 0]
+    p1y= c1* v[2* n+ 1]+ c2* v[1];
+    p2x= c2* v[2* n]+ c1* v[0];
+    p2y= c2* v[2* n+ 1]+ c1* v[1];
+    p3x= svx[0];
+    p3y= svy[0];
+    bv.push([p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y]);
+  }
+  for(i= 1; i<= n; i++) {
+    p0x= svx[i- 1];
+    p0y= svy[i- 1];
+    p1x= c1* v[2* (i- 1)]+ c2* v[2* i];//[i- 1, i]
+    p1y= c1* v[2* (i- 1)+ 1]+ c2* v[2* i+ 1];
+    p2x= c2* v[2* (i- 1)]+ c1* v[2* i];
+    p2y= c2* v[2* (i- 1)+ 1]+ c1* v[2* i+ 1];
+    p3x= svx[i];
+    p3y= svy[i];
+    bv.push([p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y]);
+  }
+  return bv;
+}//~BSpline2PolyBezier()
+
+function blot(bRandom, bFrame, bMarkers, bPointsOnCurve, bRandomAngleForArc, bRandomRadius, dwVertices) {//draw a blot using a Relaxed Uniform B-spline Curve
+  if(!arguments.length) {
+    bFrame= true;
+    bMarkers= true;
+  }
+  //console.log(bRandom+ ' '+ bFrame+ ' '+ bMarkers+ ' '+ bPointsOnCurve+ ' '+ bRandomAngleForArc+ ' '+ bRandomRadius+ ' '+ dwVertices);//dbg
+  function _RUBS_imv(n) {//super-fast shortcut to some matrix inverse (Relaxed Uniform B-Spline closed curve)
+    var v3= [3,  3, 5, -1, -1];//[3,  3, -1, -1, 5];//3:
+    var v4= [4,  4, 7, -2, 1, -2];//4:
+    var v, k, a, b, c;
+    if(n>= 3) {//A 3x3 matrix is the minimum because to draw a closed curve using a Relaxed Uniform B-Spline curve we need at least three control points.
+      switch(n) {
+        case 3: return(v3); break;
+        case 4: return(v4); break;
+      }
+    }
+    c= (n>> 1)& 1;
+    if(n& 1) {//if(n% 2) {//odd index
+      v= vector_copy(v3);//NOTE: In this case the 3x3 matrix is the root for the next MxM matrices with M odd natural number.
+      c= !c;
+    }else {//even index
+      v= vector_copy(v4);//NOTE: In this case the 4x4 matrix is the root for the next NxN matrices where N is a multiple of 2.
+    }
+    k= v.first();
+    a= v.first();
+    b= v.first();
+    while(k!= n) {
+      v.push(b);
+      v.first(b);
+      a= round((sqrt(3.0)+ 2.0)* a);
+      b= round((sqrt(3.0)+ 2.0)* b);
+      b= -b;
+      k+= 2;
+    }
+    if(c) {
+      v.foreach("v[i]= -v[i];");
+      b= -b;
+    };
+    v.first(k, a, b);
+    if((1/ a)< Math.DELTA) return null;//error: Math.RESOLUTION is too small
+    if(b> Math.RESOLUTION) return null;
+    //echof("%d: 1.0/ %s* [%s, ... //\t\t%s", n, a, b, v);//dbg
+    //echof("%s/ %s ~= %s", b, a, sqrt(3.0));//dbg
+    return v;//TODO: Compute the inverse matrix for more than 55 control points.
+  }//~blot._RUBS_imv()
+
+  function debug_bezier_curve(bv) {//Insist only on the first half. We wanna see if some polybezier is concatenated correctly.
+    var i, j, t, vx, vy, x, y, v, n, color;
+    n= bv.length;
+    for(j= 0; j< n; j++) {
+      switch(j) {
+        case 0: color= 'red'; break;
+        case 1: color= 'green'; break;
+        case 2: color= 'blue'; break;
+        default: color= 'yellow';
+      }
+      v= vector_copy(bv[j]);
+      console.log(" v[0]: "+ v);//echof(" v[0]: %s", v);
+      polygon(v, "yellow", true);
+      vx= cubic_coefficients(v[0], v[2], v[4], v[6], false, 0, true, false);
+      vy= cubic_coefficients(v[1], v[3], v[5], v[7], false, 0, true, false);
+      vector_reverse(vx);
+      vector_reverse(vy);
+      for(i= 0; i< 13/ 2; i++) {
+        t= (i+ 1)/ 13;
+        x= horner(vx, t);
+        y= horner(vy, t);
+        //x+= 400; y+= 400;
+        //echof("(%s %s) %s", x, y, t);
+        circle(x, y, 4, color);
+        marker(x, y, color);//dbg
+      }
+    }
+  }//~blot.debug_bezier_curve()
+  var v= [25,228,51,27,176,248];//"three control points"
+//  var v= [25,228,51,27,176,248, 80, 140];
+//  var v= [25,228,51,27,176,248, 180, 140];
+//  var v= [25,228,51,27,176,248, 80, 300];
+  var v= [25,228,51+ 20,27,176,248, 80, 300];
+
+  vector_translate(v, 250);
+  vector_scale(v, 1.5);
+
+   if(!bRandom && bRandomAngleForArc.length) {v= bRandomAngleForArc;}
+
+//  if(bRandom) {
+//    v= [];
+//    for(var i= 0; i< 6; i++) v.push(mt_rand(255));//add 3 control points (input data for a spline)
+//  }
+  if(bRandom) {
+    var n, x, y, p, q;
+    if(arguments.length== 1) {
+      bRandomAngleForArc= true;
+      bRandomRadius= true;
+    }
+    if(arguments.length>= 7) {
+      n= dwVertices;
+    }else {
+      n= 13* 3;//vertices
+      n= 13* 5;
+    }
+    v= [];
+    p= 0.5;//inner radius
+    q= 1.0;//outer radius
+    p= 0.75;
+    //"add n control points (input data for a spline)"
+    v= range(0, n+ 1, 1);
+    vector_normalize(v);
+
+    if(bRandomAngleForArc) {
+      v.push(0);//kludge(TODO: The Right Thing(TM)!)
+      v.foreach("v[i]= interpolate_linear(v[i], v[i+ 1], random())");//compute random angle for each arc
+      v.pop();//remove kludge
+    }
+
+    v.pop();//last vertex is malignant (will create a cusp on the circle)
+
+    v.foreach("v[i]= revolve(v[i], lParam)", random());//revolve vertices around C(0, 0) (actually we are only working with angles at this point time)
+
+    if(bRandomRadius) {
+  //    v.foreach("var p= circle2point(0,0, 1, v[i], interpolate_linear(lParam[0], lParam[1], random())); v[i]= [p.x, p.y];", [p, q]);//points on circle (random radius)
+      v.foreach("var p= circle2point(     1, v[i], interpolate_linear(lParam[0], lParam[1], random())); v[i]= [p.x, p.y];", [p, q]);//points on circle (random radius)
+    }else {
+      v.foreach("var p= circle2point(v[i]); v[i]= [p.x, p.y];", [p, q]);//points on circle
+    }
+
+    v= vector2D2vector(v);
+    vector_scale(v, 125+ 50);
+//    vector_translate(v, 250+ 50);
+//    vector_scale(v, 1.5);
+    vector_translate(v, 200);
+    vector_scale(v, 1.75);
+  }
+
+  if(bMarkers) {
+    var x, y, i;
+    for(i= 0, x= 0, y= 0; i< v.length>> 1; i++) {
+      x+= v[2* i];
+      y+= v[2* i+ 1];
+    }
+    x/= v.length>> 1;
+    y/= v.length>> 1;
+//      x= (1.0/4.0)* (v[0]+ v[2]+ v[4]+ v[6]);
+//      y= (1.0/4.0)* (v[1]+ v[3]+ v[5]+ v[7]);
+    marker(x, y, "yellow");//"center of mass"
+  }
+
+  if(bPointsOnCurve) {
+    if(3== v.length>> 1) {//"three control points"
+//v= [100, 100, 200, 100, 200, 200];//dbg
+//vector_scale(v, 2);//dbg
+//vector_translate(v, 150);//dbg
+//polygon(v, 'green', false);//dbg
+      var p0x, p0y, p1x, p1y, p2x, p2y;
+      var s0x, s0y, s1x, s1y, s2x, s2y;
+      p2y= v.pop(); p2x= v.pop();
+      p1y= v.pop(); p1x= v.pop();
+      p0y= v.pop(); p0x= v.pop();
+
+      s0x= (-1.0/ 3.0)* (p2x- 5.0* p1x+ p0x);
+      s0y= (-1.0/ 3.0)* (p2y- 5.0* p1y+ p0y);
+
+      s1x= (-1.0/ 3.0)* (-5.0* p2x+ p1x+ p0x);
+      s1y= (-1.0/ 3.0)* (-5.0* p2y+ p1y+ p0y);
+
+      s2x= (1.0/ 3.0)* (-1.0* p2x- p1x+ 5.0* p0x);
+      s2y= (1.0/ 3.0)* (-1.0* p2y- p1y+ 5.0* p0y);
+
+      v.push(s0x, s0y, s1x, s1y, s2x, s2y);
+    }else if(4== v.length>> 1) {//"four control points"
+//v= [100, 100, 200, 100, 200, 200, 100, 200];//dbg
+//vector_scale(v, 2);//dbg
+//vector_translate(v, 150);//dbg
+//polygon(v, 'green', false);//dbg
+      var p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y;
+      var s0x, s0y, s1x, s1y, s2x, s2y, s3x, s3y;
+      p3y= v.pop(); p3x= v.pop();
+      p2y= v.pop(); p2x= v.pop();
+      p1y= v.pop(); p1x= v.pop();
+      p0y= v.pop(); p0x= v.pop();
+
+      s0x= (1.0/ 4.0)* (1.0* p3x- 2.0* p2x+ 7.0* p1x- 2.0* p0x);
+      s0y= (1.0/ 4.0)* (1.0* p3y- 2.0* p2y+ 7.0* p1y- 2.0* p0y);
+
+      s1x= (-1.0/ 4.0)* (2.0* p3x- 7.0* p2x+ 2.0* p1x- p0x);
+      s1y= (-1.0/ 4.0)* (2.0* p3y- 7.0* p2y+ 2.0* p1y- p0y);
+
+      s2x= (1.0/ 4.0)* (7.0* p3x- 2.0* p2x+ p1x- 2.0* p0x);
+      s2y= (1.0/ 4.0)* (7.0* p3y- 2.0* p2y+ p1y- 2.0* p0y);
+
+      s3x= (-1.0/ 4.0)* (2.0* p3x- p2x+ 2.0* p1x- 7.0* p0x);
+      s3y= (-1.0/ 4.0)* (2.0* p3y- p2y+ 2.0* p1y- 7.0* p0y);
+
+      v.push(s0x, s0y, s1x, s1y, s2x, s2y, s3x, s3y);
+    }else if(55>= (v.length>> 1)){//"three or more control points (to a maximum of 55)"
+////v= [100, 100, 150, 75, 200, 100, 200, 200, 100, 200, 75, 150];//dbg: 6
+//v= [100, 100, 200, 100, 200, 200, 100, 200, 75, 150];//dbg: 5
+////v= [100, 100, 200, 100, 200, 200, 100, 200];//dbg: 4 control points
+////v= [100, 100, 200, 100, 200, 200];//dbg: 3 control points
+//vector_scale(v, 2);//dbg
+////marker(300, 300, 'blue');//dbg
+////circle(300, 300, 141, 'red');//dbg
+////v.foreach("v[i]= round(v[i])");//dbg
+//echof("%d: %s", v.length>>1, v);//dbg
+//polygon(v, 'green', false);//dbg
+      var m= _RUBS_imv(v.length>> 1);
+	  //console.log("m: "+ m);//dbg
+      var vv= [];
+      var i, j, k, m, n;
+      var a, b, c, d;
+      var x, y;
+      n= m.first();
+      a= 1.0/ m.first();//a= 6.0/ m.first();//dbg NOTE: Must scale by 6.0 because the original spline matrix is divided by 6.0.
+      for(i= 0; i< n; i++) {
+        x= 0;
+        y= 0;
+        for(j= 0; j< n; j++) {
+           //var m_idx= (n- i+ j)% n;//NOTE: We are extracting the matrix values from the only representative row we have. Here we compute the index in the vector. This is a small mapping function.
+           //m_idx= (m_idx+ n- 1)% n;//FIXUP: We want to start from the first control point.
+           var m_idx= (n- 1- i+ j)% n;
+           x+= m[m_idx]* v[2* j+ 0];
+           y+= m[m_idx]* v[2* j+ 1];
+        }
+        x*= a;
+        y*= a;
+        vv.push(x, y);
+      }
+      if(bMarkers) for(i= 0; i< v.length>> 1; i++) circle(v[2* i+ 0], v[2* i+ 1], 5, 'yellow');//Generator CP
+      v= vv;
+      delete vv;
+      delete m;
+////vector_scale(v, 6.0);//dbg
+////v.foreach("v[i]= round(v[i]);");//dbg
+//echof("~%d: %s", n, v);//dbg
+//polygon(v, 'red', true);//dbg
+//return;//dbg
+    }else {//TODO: "more than 55 control points"
+      //
+    }
+  }
+
+  if(bFrame) polygon(v, 'red');
+  var bv= BSpline2PolyBezier(v, true);
+  window.bv= bv;
+  bv.v= v;
+//  bv[0]= bv[0];//dbg
+//  //bv.first();// bv.length= 1;//dbg
+//  debug_bezier_curve(bv);//dbg
+  PolyBezier(bv, 'green', bMarkers);
+  return bv;
+}//~blot()
+
+//window.user.current_blot= blot(true, true, true, true, true, true, 12);//TODO:Skip matrix inverse. REASON: Get rid of curls and cusps. HINT: Use geometry, the center of mass, new intermediate control points on lines through CoM and GCP; and split in three each line through ICPs.
+//window.user.current_blot= blot(true, true, false, false, false, false, 4);
+//window.user.current_blot= blot(true, true, false, false, true, true, 100);
+
+// // splotch(true, false); //quadratic
+//blot(); // cubic
+//blot(false, true, true, true);
+
+////blot(false, true, true, true);
+//blot(false, false, true, true);
+//blot(false, true, true, false);
+
+//TODO: make the blot a little more irregular (DONE!)
+//HINT: place the blot's vertices on a circle's rays plus-minus a random value (maybe max50% the circle's radius)
+//TODO: make the blot more irregular and nicer (more like a fractal or a road on map)
+//HINT: use noise octaves
+</script>
+<script>
+
+function vector_copy(v) {
+   //and now.. some AI for "vector_copy(arguments)":
+   // iff (!) efficiency is desirable use (more or less) efficiently some (or every) available
+   // means to achieve the specified objective in an efficient (ditto) manner
+   if(arguments.length< 1) {//implement functions with C-like variable arguments
+     if(arguments.caller&& arguments.caller.length) {//BUG: IE6 SPECIFIC!!
+       v= arguments.caller;
+     }else
+       v= arguments.callee.caller.arguments;//BUG-FIX: FF3: CALLER is defined...
+   }
+   var n, i, w;
+   n= v.length;
+   w= [];
+   for(i= 0; i< n; i++) w[i]= v[i];
+   return w;
+}
+
+function vector_first(value) {
+  if(arguments.length) {
+    var i= arguments.length;
+    while(--i>= 0) this.splice(0, 0, arguments[i]);
+    return this.length;
+  }
+  return this.splice(0, 1)[0];
+}
+
+Array.prototype.first= vector_first;
+
+function vector_translate(v, dist) {
+   var i, n;
+   n= v.length;
+   for(i= 0; i< n; i++) {
+      v[i]+= dist;
+   }
+   return v;
+}
+
+function vector_scale(v, ratio) {
+   var i, n;
+   n= v.length;
+   for(i= 0; i< n; i++) {
+      v[i]*= ratio;
+   }
+   return v;
+}
+
+function vector_normalize(v) {
+   var r= vector_range(v);
+   if(r[1]- r[0])
+      return vector_scale(vector_translate(v, -r[0]), 1/(r[1]- r[0]))
+   else
+      return vector_translate(v, -r[0]);
+}
+
+function vector_range(v) {
+  var i, n, _min, _max;
+  n= v.length;
+  _min= v[0];
+  _max= v[0];
+  for(i= 0; i< n; i++) {
+     if(_min> v[i]) _min= v[i];
+     if(_max< v[i]) _max= v[i];
+  }
+  return [_min, _max];
+}
+
+function vector_reverse(v) {
+    v.reverse();
+    return v;
+}
+
+function vector2D2vector(v2D) {
+  var v, i, n;
+  v= [];
+  n= v2D.length;
+  for(i= 0; i< n; i++) {
+    v.push(v2D[i][0], v2D[i][1]);
+  }
+  return v;
+}
+
+function range(start, stop, step) { // emulate the PYTHON range function
+   var t= arguments.length;
+   if(t== 1) stop= start;
+   if(t< 2) start= 0;
+   if(t< 3) step= 1;
+   var r= [];
+   if(step== 0) return r;
+   if(step> 0) {
+      if(start>= stop) return r;
+   }else {
+      if(start<= stop) return r;
+   }
+   var n= ceil( fabs(start- stop)/ fabs(step));
+   for(var i= 0; i< n; i++) {
+      r[i]= start+ i* step;
+   }
+   return r;
+}
+
+window.ceil= Math.ceil;
+window.random= Math.random;
+window.round= Math.round;
+window.sqrt= Math.sqrt;
+window.sin= Math.sin;
+window.cos= Math.cos;
+
+function uint32(x) {return ((x)>>> 0);}//{return parseInt(hex(x), 16);}
+
+function DWORD(x) {
+   //return (x& 0xFFFFFFFF);
+   return uint32(x);
+}
+function WORD(x) {
+   return (DWORD(x)& 0xFFFF);
+}
+function BYTE(x) {
+   return (DWORD(x)& 0xFF);
+}
+function HIWORD(x) {
+   return DWORD(x) >>> 16;
+}
+function LOWORD(x) {
+   return WORD(x);
+}
+function HIBYTE(x) {
+   return WORD(x) >>> 8;
+}
+function LOBYTE(x) {
+   return BYTE(x);
+}
+
+/* Reverse the first N bits of X, using straightforward code
+   (a faster method would use a table)
+*/
+function bit_reverse(x, n){
+   var res= 0;
+   do{
+      res<<= 1;
+      res|= x& 1;
+      x>>>= 1;
+   } while(--n> 0);
+   return res;
+}
+/* Reverse the bits of a 32bit number
+  (eg. the order; as opposed to the NOT(~) operator)
+*/
+function rev32(x) {
+   return bit_reverse(DWORD(x), 32);
+}
+
+function rol32(x, n) {// Bitwise rotate a 32-bit number to the left.
+   n%= 32;//"Note: (CL= (n& 0xFF)% 32)" "Note too: ((n%= 32)=== (n&= 0x1F))."
+   return (x<< n)| (x>>> (32- n));
+}
+
+function ror32(x, n) {// Bitwise rotate a 32-bit number to the right
+   n%= 32;//"Note: (n&= 0x1F) is a faster equivalent."
+   return (x>>> n)| (x<< (32- n));
+}
+
+function and(a, b) {return (a& b)}
+function or (a, b) {return (a| b)}
+function not(a)    {return (~a  )}
+function xor(a, b) {return (a^ b)}
+function rol(x, n) {return rol32(x, n)}
+function ror(x, n) {return ror32(x, n)}
+function rev(x)    {return rev32(x)}
+function sar(x, n) {return (x>> n)} // bitwise shift arithmetic right
+function shr(x, n) {return (x>>> n);} // bitwise shift right
+function shl(x, n) {return (x<< n)} // bitwise shift left
+
+function abs(a){ return  (a>=0)?a:-a}
+
+function fabs(x){
+   if(x< 0.0) return -x;
+   return x;
+}
+
+function sgn(a){ return (a>=0)?1:-1}
+
+function _revolve(t, m) {//Revolve t around m. (0.0<= t<= 1.0), (0.0<= m<= 1.0)
+  t+= m;
+  if(t> 1.0) t-= 1.0;
+  return t;
+}
+
+function revolve(t, m) {//Revolve t around m. (0.0<= t<= 1.0), (0.0<= m<= 1.0)
+  t+= m;
+  t%= 1.0;
+  return t;
+}
+
+function foreach(code, lParam/*, bSetLastError, bStopOnError*/) {// for n items v[i] is the current item; local variables: [code, v, i, n, lParam];
+  var v, i, n;
+  v= this;
+  n= this.length;
+  for(i= 0; i< n; i++) {
+    try {
+      eval(code);
+    }catch(foreach) {
+      if(arguments[2]) {//bSetLastError
+        try{SetLastError(['Error: foreach: '+ foreach.description, foreach.number& 0xFFFF, get_call_stack(arguments.callee), [code, v, i, n, lParam]]);}catch(foreach){};
+      }
+       if(arguments[3]) break;//bStopOnError
+     }
+  }
+  return this; // w= new Array(13); w.foreach('v[i]= lParam++', 13);
+}//~foreach()
+
+Array.prototype.foreach= foreach;
+
+function polygon(v, c, bMarkers) {//draw a polygon "polygon([25,228,51,27,176,248], 'red', true);"
+  var i, n;
+  n= v.length>> 1;
+  for(i= 0; i< n; i++) {
+    if(bMarkers) marker(v[2* i], v[2* i+ 1], c);
+    line(v[2* i], v[2* i+ 1], v[2* i+ 2], v[2* i+ 3], c);
+  }
+  i--;
+  line(v[2* i], v[2* i+ 1], v[0], v[1], c);
+}//~polygon()
+
+//NOTE: line() clip by viewport would be faster?
+function line(x1, y1, x2, y2, c) { // Draw a line (Bresenham method)
+   var x, y, dx, dy, dx2, dy2, sx, sy, e, i;
+   x= x1; y= y1;
+   dx= abs(x2- x1); dy= abs(y2- y1);
+   dx2= dx<< 1; dy2= dy<< 1;
+   sx= sgn(x2- x1); sy= sgn(y2- y1);
+   if(dx== dy) { // diagonal line
+      if(sx== 1)
+         if(sy== 1) for(i= 0; i<= dx; i++) putpixel(x++, y++, c);
+         else for(i= 0; i<= dx; i++) putpixel(x++, y--, c);
+      else
+        if(sy== 1) for(i= 0; i<= dx; i++) putpixel(x--, y++, c);
+        else for(i= 0; i<= dx; i++) putpixel(x--, y--, c);
+   }else if(dy> dx) {
+      if(dx== 0) { // vertical line
+         (sy== 1)? vline(x1, y1, dy, c)
+                 : vline(x2, y2, dy, c);
+      }else { // oblique line
+         e= dx2- dy;
+         for(i= 0; i<= dy; i++) {
+            putpixel(x, y, c);
+            while(e>= 0) {
+               x+= sx;
+               e-= dy2;
+            }
+            y+= sy;
+            e+= dx2;
+         }
+      }
+   }else {
+      if(dy== 0) { // horizontal line
+         (sx== 1)? hline(x1, y1, dx, c)
+                 : hline(x2, y2, dx, c);
+      }else { // oblique line
+         e= dy2- dx;
+         for(i= 0; i<= dx; i++) {
+            putpixel(x, y, c);
+            while(e>= 0) {
+               y+= sy;
+               e-= dx2;
+            }
+            x+= sx;
+            e+= dy2;
+         }
+      }
+   }
+}//~line()
+
+function curve(x0, y0, x1, y1, x2, y2, x3, y3, c, bMarker) {//draw a cubic bezier curve
+  if(bMarker) {
+    marker(x0, y0, c); marker(x1, y1, c);
+    marker(x2, y2, c); marker(x3, y3, c);
+  }
+  function _curve(t, P) {
+    var b0, b1, b2, b3;// basis functions "(t+ (1- t))^ 3"
+    b0= (1- t)* (1- t)* (1- t);
+    //b1= 3* (1- t)* (1- t)* t;
+    b2= 3* (1- t)* t* t;
+    b3= t* t* t;
+    //P.x= b0* x0+ b1* x1+ b2* x2+ b3* x3;
+    //P.y= b0* y0+ b1* y1+ b2* y2+ b3* y3;
+    P.x= b0* (x0- x1)+ x1+ b2* (x2- x1)+ b3* (x3- x1);
+    P.y= b0* (y0- y1)+ y1+ b2* (y2- y1)+ b3* (y3- y1);
+  }
+  var t, step, steps;
+  var x, y, i, P0, P1;
+  P0= new Point();
+  P1= new Point();
+  _curve(0, P0);
+  steps= 200; // arbitrary (increase for higher resolutions)
+  step= 1/ steps;
+  for(t= 0, i= 0; i< steps; i++, t+= step) {
+    _curve(t, P1);
+    line(P0.x, P0.y, P1.x, P1.y, c);
+    P0.copy(P1);
+  } //"curveT3(0, 0, 100, 100, 200, 0, 300, 300, 'green');"
+  P0.copy(P1);
+  _curve(1, P1);
+  line(P0.x, P0.y, P1.x, P1.y, c);
+}//~curve()
+
+function polygon(v, c, bMarkers) {//draw a polygon "polygon([25,228,51,27,176,248], 'red', true);"
+  var i, n;
+  n= v.length>> 1;
+  for(i= 0; i< n; i++) {
+    if(bMarkers) marker(v[2* i], v[2* i+ 1], c);
+    line(v[2* i], v[2* i+ 1], v[2* i+ 2], v[2* i+ 3], c);
+  }
+  i--;
+  line(v[2* i], v[2* i+ 1], v[0], v[1], c);
+}//~polygon()
+
+function circle(cx, cy, r, c) { // Bresenham circle
+  function _plot8() {
+    putpixel(cx+ x, cy+ y, c); // point in octant 1
+    putpixel(cx+ y, cy+ x, c); // in octant 2
+    putpixel(cx- y, cy+ x, c); // octant 3
+    putpixel(cx- x, cy+ y, c); // 4
+    putpixel(cx- x, cy- y, c); // 5
+    putpixel(cx- y, cy- x, c); // 6
+    putpixel(cx+ y, cy- x, c); // 7
+    putpixel(cx+ x, cy- y, c); // 8
+  }
+  var x, y, dx, dy, dr;
+  x= r;
+  y= 0;
+  dx= 1- shl(r, 1); //1- 2* r;
+  dy= 1;
+  dr= 0;
+  while (x>= y) {
+    _plot8();
+    y++;
+    dr+= dy;
+    dy+= 2;
+    if ((shl(dr, 1)+ dx)> 0) { //if ((2* dr+ dx)> 0) {
+      x--;
+      dr+= dx;
+      dx+= 2;
+    }
+  } //circle(400, 400, 60, 'red');
+} //~circle()
+
+function Point(x, y) {
+   if(x=== null) x= undefined;
+   if(typeof(x)== "object" && arguments.length== 1 && x.constructor=== Point) {
+      y= x.y;
+      x= x.x;
+   }else {
+      //x= parseInt(x);      y= parseInt(y);
+      x= parseFloat(x);
+      y= parseFloat(y);
+      if(isNaN(x)) x= 0;
+      if(isNaN(y)) y= 0;
+   }
+   function move(x, y) {
+      this.x= x; // abscisa
+      this.y= y; // ordinate
+   }
+   function translate(x, y) {
+      this.x+= x;
+      this.y+= y;
+   }
+   function rotate(c, alpha) {
+      var p= rotplan(c, this, alpha);
+      this.move(p.x, p.y);
+   }
+   function equals(p) {
+      if(arguments.length== 1 && typeof(p)== "object" && p.constructor=== Point) {
+         return (this.x== p.x)&& (this.y== p.y);
+      }else return false;
+   }
+   function copy(p) {
+      if(arguments.length== 1 && typeof(p)== "object" && p.constructor=== Point) {
+         this.x= p.x;
+         this.y= p.y;
+      }
+   }
+   function valueOf() {
+      return [this.x, this.y];
+   }
+   function toString() {
+      return [this.x, this.y].toString();
+   }
+   this.move= move;
+   this.translate= translate;
+   this.equals= equals;
+   this.copy= copy;
+   this.valueOf= valueOf;
+   this.toString= toString;
+   this.x= x;
+   this.y= y;
+}//~Point()
+
+function Point2D(x, y) { // cartesian coordinates in 2D
+   function move(x, y) {
+      this.x= x; // abscissa
+      this.y= y; // ordinate
+   }
+   function scale(x, y) {
+      if(arguments.length== 1) y= x;
+      this.x*= x;
+      this.y*= y;
+   }
+   function translate(x, y) {
+      if(arguments.length== 1) y= x;
+      this.x+= x;
+      this.y+= y;
+   }
+   function rotate(c, alpha) {
+      if(arguments.length== 1) {//"rotate around Origin"
+        alpha= arguments[0];
+        c= new Point2D(0, 0);
+      }
+      this.copy(rotplan(c, this, alpha));
+   }
+   function skew(sx, sy) {//TODO
+     SetLastError(['Point2D.skew not Implemented!', Errors.NotImplemented, get_call_stack(arguments.callee)]);
+
+   }
+   function transform(a, b, c, d, e, f, g, h, i) {
+     var w, x, y;
+     x= this.x;
+     y= this.y;
+     w= (g* x+ h* y+ i);
+     w= ((w!= 0.0)? (1.0/ w): NaN);//w= ((w!= 0.0)? (1.0/ w): 0.0);
+     this.x= w* (a* x+ b* y+ c);
+     this.y= w* (d* x+ e* y+ f);
+   }
+   function normalize() {
+     var r= sqrt(this.x* this.x+ this.y* this.y);
+     if(r!= 0.0) this.scale(1/ r);
+   }
+   function angle(c) {
+     if(!arguments.length) return atan2(this.y, this.x);//"return angle in radians; relative to Origin"
+     return atan2(this.y- c.y, this.x- c.x); //"relative to Center (c.x, c.y)"
+   }
+   function angleTo(p) {
+     return p.angle(this);
+   }
+   function sector(n, bOblique) {
+     //return this.sectorAt(new Point2D(0, 0), n, bOblique);
+     var x, y;
+     x= this.x;
+     y= this.y;
+     n= parseInt(n);
+     n= ((!n)? 0x100000000: abs(n));//"resolution"
+     if (bOblique) return floor(
+      n* revolve(u2t((1.0/ Math.PI)* atan2(-y, -x)), 1.0/ (2.0* n))
+     );
+     return floor(
+      n* u2t((1.0/ Math.PI)* atan2(-y, -x))
+     );
+   }
+   function sectorAt(p, n, bOblique) {
+     //SetLastError(['Point2D.sectorAt not Implemented!', Errors.NotImplemented, get_call_stack(arguments.callee)]);
+     var x, y;
+     x= this.x- p.x;
+     y= this.y- p.y;
+     n= parseInt(n);
+     n= ((!n)? 0x100000000: abs(n));//"resolution; number of sectors"
+     if (bOblique) return floor(
+      n* revolve(u2t((1.0/ Math.PI)* atan2(-y, -x)), 1.0/ (2.0* n))
+     );
+     return floor(
+      n* u2t((1.0/ Math.PI)* atan2(-y, -x))
+     );
+   }
+   function quadrant(bOblique) {
+     if(bOblique) {
+       var x, y, ax, ay;
+       x= this.x;
+       y= this.y;
+       ax= ((x>= 0)? x: -x);//"abs()"
+       ay= ((y>= 0)? y: -y);//"abs()"
+       if(ax== ay) return [3, 0, 2, 1][(
+         ((y> 0)<< 1)|
+         (x> 0)
+       )];
+       return [1, 2, 0, 3][(
+        ((y< x)<< 1)^
+        (y< -x)
+       )];
+     }
+     return (//TODO: Optimize.
+       ((((((this.y< 0)+ 0)<< 1)+ ((this.x< 0)+ 0)))^ (1& (this.y< 0))) //return ([0, 1, 3, 2][((((this.y< 0)+ 0)<< 1)+ ((this.x< 0)+ 0))]);//TODO: Faster?
+       +
+       (((this.x== 0)&& (this.y> 0))| ((this.y== 0)&& (this.x< 0))) // (((this.x== 0)&& (this.y> 0))+ ((this.y== 0)&& (this.x< 0)))
+     );//NOTE: "The first two bits (Most Significant Bits) of atan2()."
+   }
+   function quadrantAt(p, bOblique) {
+     if(bOblique) {
+       var x, y, ax, ay;
+       x= this.x- p.x;
+       y= this.y- p.y;
+       ax= ((x>= 0)? x: -x);//"abs()"
+       ay= ((y>= 0)? y: -y);//"abs()"
+       if(ax== ay) return [3, 0, 2, 1][(
+         ((y> 0)<< 1)|
+         (x> 0)
+       )];
+       return [1, 2, 0, 3][(
+        ((y< x)<< 1)^
+        (y< -x)
+       )];
+     }
+     return (//TODO: Optimize.
+       ((((((this.y- p.y)< 0)+ 0)<< 1)+ (((this.x- p.x)< 0)+ 0))^ (1& ((this.y- p.y)< 0))) //return ([0, 1, 3, 2])[(((((this.y- p.y)< 0)+ 0)<< 1)+ (((this.x- p.x)< 0)+ 0))];//TODO: Faster?
+       +
+       ((((this.x- p.x)== 0)&& ((this.y- p.y)> 0))+ (((this.y- p.y)== 0)&& ((this.x- p.x)< 0)))
+     );
+   }
+   function octant(bOblique) {
+     if(bOblique) {//TODO: Test for consistency.
+       return this.sector(8, true);
+       //SetLastError(['Point2D.octant: bOblique= '+ bOblique+ ' not Implemented!', Errors.NotImplemented, get_call_stack(arguments.callee)]); return NaN;
+     }
+     var a, b;
+     a= this.quadrant();
+     b= this.quadrant(true);
+     return ((a<< 1)| ((a^ b)& 1));
+     //var p= this; return [5, 4, 6, 7, 2, 3, 1, 0][ ((p.y> 0)<< 2)| ((p.x> 0)<< 1)| ((p.y< p.x)^ (p.y< -p.x))];//BUG!
+   }
+   function octantAt(p, bOblique) {
+     if(bOblique) {//TODO: Test for consistency.
+       return this.sectorAt(p, 8, bOblique);
+     }
+     var a, b;
+     a= this.quadrantAt(p);
+     b= this.quadrantAt(p, true);
+     return ((a<< 1)| ((a^ b)& 1));
+     //var x, y; x= this.x- p.x; y= this.y- p.y; return [5, 4, 6, 7, 2, 3, 1, 0][((y> 0)<< 2)| ((x> 0)<< 1)| ((y< x)^ (y< -x))];//BUG: Fast but incomplete or inconsistent!
+   }
+   function equals(p) {
+      if(arguments.length== 1 && typeof(p)== "object" && p.constructor=== Point2D) {
+         return (this.x== p.x)&& (this.y== p.y);
+      }else return false;
+   }
+   function copy(p) {
+      if(arguments.length== 0) return new Point2D(this.x, this.y);
+      if(arguments.length== 1 && typeof(p)== "object" && p.constructor=== Point2D) {
+         this.x= p.x;
+         this.y= p.y;
+      }
+   }
+   function distanceTo(p) {
+      if(arguments.length== 0) return sqrt(this.x* this.x+ this.y* this.y);
+      if(arguments.length== 1 && typeof(p)== "object" && p.constructor=== Point2D) {
+         return sqrt(sqr(this.x- p.x)+ sqr(this.y- p.y));
+      }
+   }
+   function valueOf() {return [this.x, this.y];}
+   function toString() {return this.valueOf().toString()}
+   this.move= move;
+   this.scale= scale;
+   this.translate= translate;
+   this.rotate= rotate;
+   this.skew= skew;
+   this.transform= transform;
+   this.normalize= normalize;
+   this.angle= angle;
+   this.angleTo= angleTo;
+   this.angleAt= angleTo;
+   this.sector= sector;
+   this.sectorAt= sectorAt;
+   this.quadrant= quadrant;
+   this.quadrantAt= quadrantAt;
+   this.octant= octant;
+   this.octantAt= octantAt;
+   this.equals= equals;
+   this.copy= copy;
+   this.distanceTo= distanceTo;
+   this.valueOf= valueOf;
+   this.toString= toString;
+   this.move(x, y);
+   return this;
+}//~Pont2D.
+
+/*
+  Machine floating point math:
+
+  MATH RESOLUTION: 4503599627370497
+  MATH DELTA: 2.220446049250313e-16
+
+  machine delta:
+    A measure of precision; which can be expressed
+  in terms of the smallest number that can be
+  added to 1.0 without loss of significance.
+*/
+function math_delta() { // the smallest fraction of a unit
+  var t, dx;
+  dx= 1.0;
+  do {
+     dx/= 2.0;
+     t= 1.0+ dx;
+  } while(t!= 1.0);
+  return (2.0* dx);
+}
+
+function math_resolution() { // how many numbers can we discriminate in [0..1] interval
+  var delta= math_delta();
+  var resolution= (1.0/ delta)+ 1;
+  return resolution;
+}
+
+window.math_resolution= math_resolution;
+window.math_delta= math_delta;
+
+window.Math.DELTA= math_delta();
+window.Math.RESOLUTION= math_resolution();
+
+function circle2point(cx, cy, r, t, u) {
+  switch(arguments.length) {
+    case 1: {
+      u= 1.0;
+      t= arguments[0];
+      r= 1.0;
+      cy= 0.0;
+      cx= 0.0;
+    }break;
+    case 2: {
+      u= 1.0;
+      t= arguments[1];
+      r= arguments[0];
+      cy= 0.0;
+      cx= 0.0;
+    }break;
+    case 3: {
+      u= arguments[2];//ray's fraction; interval [0.0 .. 1.0]
+      t= arguments[1];//arc's angle (normalized: eg. not in degrees or radians); interval: [0.0 .. 1.0]
+      r= arguments[0];//circle's radius
+      cy= 0.0;        //center's ordinate
+      cx= 0.0;        //center's abscissa
+    }break;
+    case 4: {
+      u= 1.0;
+    }break;
+  }
+  var sc, x, y;
+  var sc= sincosT(t);
+  x= interpolate_linear(cx, cx+ r* sc[1], u);
+  y= interpolate_linear(cy, cy+ r* sc[0], u);
+  return new Point2D(x, y);
+}//~circle2point()
+
+function easyT(t) {return (t- interpolate_easy(0, 1, t));}
+
+function sincosT(t) {//a reparameterized circle (0.0<= t<= 1.0)
+  //use only "the idea" of sine and cosine (Because sines, cosines, and tangents are interdependent. And we're not computing the tangent.)
+  function u(t) {//a parabola (fast), if you want more accuracy use higher degree polynomials (we're actually simulating a tangent function)
+    var m;
+    m= Math.SQRT2- 1;//constant
+    m+= m;
+    m+= m;
+    t= t* (t* (2- m)+ m- 1);
+    return t;
+  }
+
+  ////function u(t) {return interpolate_quadratic(0, tan(rad(45/ 2)), 1, interpolate_easy(0, 1, t));}//dbg
+  ////function u(t) {return interpolate_easy(0, 1, interpolate_quadratic(0, tan(rad(45/ 2)), 1, t));}//dbg
+  ////function u(t) {return easyT(interpolate_quadratic(0, tan(rad(45/ 2)), 1, t));}//dbg
+
+  //function u(t) {return interpolate_quadratic(0, tan(rad(45/ 2)), 1, t);}//a parabola
+  //function u(t) {return interpolate_cubic(0, tan(rad(1/ 3* 45)), tan(rad(2/ 3* 45)), 1, t);}
+  //function u(t) {return interpolate([0, tan(rad(1/ 4* 45)), tan(rad(2/ 4* 45)), tan(rad(3/ 4* 45)), 1], t);}
+  //function u(t) {return interpolate([0, tan(rad(1/ 5* 45)), tan(rad(2/ 5* 45)), tan(rad(3/ 5* 45)), tan(rad(4/ 5* 45)), 1], t);}
+  //function u(t) {return interpolate([0, tan(rad(1/ 6* 45)), tan(rad(2/ 6* 45)), tan(rad(3/ 6* 45)), tan(rad(4/ 6* 45)), tan(rad(5/ 6* 45)), 1], t);}
+  //function u(t) {return interpolate([0, tan(rad(1/ 7* 45)), tan(rad(2/ 7* 45)), tan(rad(3/ 7* 45)), tan(rad(4/ 7* 45)), tan(rad(5/ 7* 45)), tan(rad(6/ 7* 45)), 1], t);}
+  //function u(t) {return interpolate([0, tan(rad(1/ 8* 45)), tan(rad(2/ 8* 45)), tan(rad(3/ 8* 45)), tan(rad(4/ 8* 45)), tan(rad(5/ 8* 45)), tan(rad(6/ 8* 45)), tan(rad(7/ 8* 45)), 1], t);}
+  //function u(t) {return t;}//dbg (fastest but quite crude)
+  var s, c, t2, d;
+  if(t< 0.5) {//I- II
+    if(t<= 0.25){//Quadrant I
+      t+= t; t+= t;
+      t= u(t);//rearrange the points on the circle more or less equidistant (so to speak)
+      t2= t* t;
+      d= 1/ (1+ t2);//(atan(t))'
+      s= d* (t+ t);//sine
+      c= d* (1- t2);//cosine
+    }else {//Quadrant II
+      t-= 0.25;
+      t+= t; t+= t;
+      t= 1- t;
+      t= u(t);
+      t2= t* t;
+      d= 1/ (1+ t2);
+      s= d* (t+ t);
+      c= -d* (1- t2);
+    }
+  }else {//III-IV
+    if(t<= 0.75) {//Quadrant III
+      t-= 0.50;
+      t+= t; t+= t;
+      t= u(t);
+      t2= t* t;
+      d= 1/ (1+ t2);
+      s= -d* (t+ t);
+      c= -d* (1- t2);
+    }else {//Quadrant IV
+      t-= 0.75;
+      t+= t; t+= t;
+      t= 1- t;
+      t= u(t);
+      t2= t* t;
+      d= 1/ (1+ t2);
+      s= -d* (t+ t);
+      c= d* (1- t2);
+    }
+  }//I-II-III-IV
+  return [s, c];
+}//~sincosT()
+
+
+</script>
+<script>
+
+function bar(x, y, w, h, c) {//TODO:clip by viewport
+//   var viewport= getViewport();
+   var viewport= {left:0, top:0};
+   x+= viewport.left;
+   y+= viewport.top;
+   //TODO:use a fast box clipper
+   var o= document.createElement('div');
+   o.style.left= x+ 'px';
+   o.style.top= y+ 'px';
+   o.style.width= w+ 'px';
+   o.style.height= h+ 'px';
+   o.style.backgroundColor= c;
+   var d= document.getElementById('App');
+   d.appendChild(o);
+}
+
+let putpixel= async (x, y, c)=> {bar(x,y,1,1,c);}
+
+let marker= async (x, y, c, bSnapToGrid)=> {
+  if(bSnapToGrid) {
+    x= floor(x)* 3+ 1;
+    y= floor(y)* 3+ 1;
+  }else {
+    x-= 1;
+    y-= 1;
+  }
+  bar(x, y, 3, 3, c);
+}
+
+let main= async ()=> {
+//  alert("Hello world!");
+  window.user= {};
+  var bRandom= true;
+  var bFrame= false;
+  var bMarkers= false;//true;
+  var bPointsOnCurve= true;
+  var bRandomAngleForArc= false;//true;
+  var bRandomRadius= true
+  var dwVertices= 32; // 32 // 64 // 128
+
+  // draw a blot using a Relaxed Uniform B-spline Curve
+  blot(bRandom, bFrame, bMarkers, bPointsOnCurve, bRandomAngleForArc, bRandomRadius, dwVertices);
+
+  //blot(bRandom, bFrame, bMarkers, bPointsOnCurve, bRandomAngleForArc, bRandomRadius, dwVertices);
+  
+  //window.user.current_blot= blot(true, true, false, false, true, true, 100);
+  //window.user.current_blot= blot(true, false, false, false, true, true, 100);
+  //window.user.current_blot= blot(true, true, false, false, true, true, 4);
+  
+  //marker(random()* 130, random()* 130, "red");//dbg
+  //putpixel(random()* 130, random()* 130, "red");//dbg
+}
+window.onload= main;
+</script>
+</head>
+<body><div id="App" style="width:100%;height:100%"><div align="center">
+
+</div>
+</div>
+</body>
+</html>
